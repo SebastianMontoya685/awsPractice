@@ -17,14 +17,14 @@ func uploadFile(filepath string, bucket string, key string) error {
 	// Opening the file
 	file, err := os.Open(filepath)
 	if err != nil {
-		return fmt.Errorf("Error opening file: %v", err)
+		return fmt.Errorf("opening file: %w", err)
 	}
 	defer file.Close()
 
 	// Creating a new AWS session
 	awsSession, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
-		return fmt.Errorf("Error creating AWS session: %v", err)
+		return fmt.Errorf("creating AWS session: %w", err)
 	}
 
 	// Creating a new S3 client
@@ -37,7 +37,7 @@ func uploadFile(filepath string, bucket string, key string) error {
 		Body:   file,
 	})
 	if err != nil {
-		return fmt.Errorf("Error uploading file: %v", err)
+		return fmt.Errorf("uploading file: %w", err)
 	}
 
 	return nil
@@ -47,7 +47,7 @@ func notifyLambda(payload map[string]string) error {
 	// Creating a new AWS session
 	awsSession, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
-		return fmt.Errorf("Error creating AWS session: %v", err)
+		return fmt.Errorf("creating AWS session: %w", err)
 	}
 
 	// Creating a new lambda client
@@ -56,7 +56,7 @@ func notifyLambda(payload map[string]string) error {
 	// Marshalling the payload into bytes
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("Error marshalling payload: %v", err)
+		return fmt.Errorf("marshalling payload: %w", err)
 	}
 
 	// Invoking the lambda function
@@ -65,7 +65,7 @@ func notifyLambda(payload map[string]string) error {
 		Payload:      payloadBytes,
 	})
 	if err != nil {
-		return fmt.Errorf("Error invoking lambda function: %v", err)
+		return fmt.Errorf("invoking lambda function: %w", err)
 	}
 
 	return nil
@@ -99,13 +99,12 @@ func getKeys(bucket string) ([]string, error) {
 			return nil, fmt.Errorf("error listing objects: %v", err)
 		}
 
-		// Listing our keys
+		// Collect keys from this page
 		for _, object := range listObjectsOutput.Contents {
 			keys = append(keys, aws.ToString(object.Key))
-			fmt.Println("-", aws.ToString(object.Key))
 		}
 
-		if !*listObjectsOutput.IsTruncated {
+		if !aws.ToBool(listObjectsOutput.IsTruncated) {
 			break
 		}
 
@@ -168,11 +167,29 @@ func main() {
 	filepath := flag.String("filepath", "", "Path to the file that we want to upload to AWS")
 	bucket := flag.String("bucket", "", "Name of the S3 bucket that we want to upload the file to")
 	key := flag.String("key", "", "Name of the key that we want to upload the file to")
-	lambdaName := flag.String("lambda", "", "Name of the Lambda function that we want to notify")
+	// lambdaName := flag.String("lambda", "", "Name of the Lambda function that we want to notify")
 	listBuckets := flag.Bool("list-buckets", false, "List all S3 buckets")
 	listFunctions := flag.Bool("list-functions", false, "List all Lambda functions")
 	listKeys := flag.Bool("keys", false, "List all keys in an S3 bucket")
 	flag.Parse()
+
+	// If a bucket name and a file has been provided, upload the file to the bucket:
+	if *bucket != "" && *filepath != "" {
+		// Uploading the file to the s3 bucker using a goroutine
+		s3Upload := make(chan error)
+
+		go func() {
+			s3Upload <- uploadFile(*filepath, *bucket, *key)
+		}()
+
+		err := <-s3Upload
+		if err != nil {
+			fmt.Printf("Error uploading file: %v", err)
+			return
+		}
+
+		fmt.Println("File uploaded successfully")
+	}
 
 	// If the list-buckets flag is true, list the S3 buckets
 	if *listBuckets {
@@ -220,37 +237,5 @@ func main() {
 		fmt.Println(result.keys)
 	}
 
-	// Uploading the file to the s3 bucker using a goroutine
-	s3Upload := make(chan error)
-
-	go func() {
-		s3Upload <- uploadFile(*filepath, *bucket, *key)
-	}()
-
-	err := <-s3Upload
-	if err != nil {
-		fmt.Printf("Error uploading file: %v", err)
-		return
-	}
-
-	// Notifying a lambda function using a goroutine, and also using AWS SQS to send a message to receivers
-	lambdaUpload := make(chan error)
-
-	// Configuring the payload for the lambda function
-	payload := map[string]string{
-		"bucket":     *bucket,
-		"key":        *key,
-		"lambdaName": *lambdaName,
-	}
-	go func() {
-		lambdaUpload <- notifyLambda(payload)
-	}()
-
-	err = <-lambdaUpload
-	if err != nil {
-		fmt.Printf("Error notifying lambda function: %v", err)
-		return
-	}
-
-	fmt.Println("File uploaded and lambda function notified successfully")
+	return
 }
