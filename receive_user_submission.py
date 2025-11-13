@@ -10,13 +10,14 @@ from flask import Flask, request, jsonify
 # client = OpenAI(llm_model="gpt-4o-mini")
 
 app = Flask(__name__)
+client = OpenAI()
 
 # Function to rank the user submission based on user sentiment
 def rank_user_submission(user_submission: str) -> {str: str, str: int}:
     # Creating the prompt for the LLM
     prompt = f"Rank the user submission based on user sentiment, so based on how the user feels: {user_submission}"
 
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         # Using the GPT-4o-mini model
         model="gpt-4o-mini",
         messages=[
@@ -25,9 +26,7 @@ def rank_user_submission(user_submission: str) -> {str: str, str: int}:
         ]
     )
 
-    sentiment = response['choices'][0]['message']['content']
-
-    return {'sentiment': sentiment}, 200
+    return response.choices[0].message.content.strip()
 
 # Main function to receive the user submission
 @app.route("/webhook", methods=["POST"])
@@ -38,6 +37,7 @@ def webhook():
 
     # Feeding the data into the LLM to rank the user submission based on user sentiment:
     sentiment = rank_user_submission(data)
+    print("Sentiment: ", sentiment)
 
     # Checking if the sentiment is None
     if sentiment is None:
